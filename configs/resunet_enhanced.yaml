@@ -1,0 +1,50 @@
+# UNET4DownscalingWRF-v2 Configuration Example
+# ResUNet with enhanced bottleneck
+
+model:
+  name: "resunet"
+  in_channels: 7
+  out_channels: 1
+  n_filters: 96
+  dropout: 0.0
+  dilation: 1
+  use_attention: false
+  bottleneck: "enhanced"  # basic, dilated, enhanced
+  upsampling: "bilinear"  # bilinear, convtranspose
+
+data:
+  predictors_path: "data/d04.asd05/"
+  targets_path: "data/d05/"
+  input_vars:
+    - "U"
+    - "V"
+    - "W"
+    - "T"
+    - "P"
+    - "HGT"
+    - "TKE"
+  target_vars:
+    - "U"
+    - "V"
+  train_heights: [80]
+  target_heights: [80]
+  patch_size: 64
+  batch_size: 32
+  num_workers: 4
+  train_ratio: 0.8
+
+training:
+  epochs: 100
+  learning_rate: 1.0e-4
+  weight_decay: 0.0
+  batch_size: 32
+  gradient_clip: 1.0
+  validate_every: 1
+  save_every: 10
+  patience: 20
+  mixed_precision: false
+
+output_dir: "outputs/experiment_001"
+experiment_name: "resunet_enhanced_v2"
+seed: 42
+device: "cuda"
