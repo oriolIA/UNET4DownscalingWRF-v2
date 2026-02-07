@@ -1,4 +1,5 @@
-from .unet import UNetFactory, SimpleUNet, ResUNet, ResUNetV2
-from .blocks import ResidualBlock, PreActivationResBlock, SqueezeExcitation
-
-__all__ = ["UNetFactory", "SimpleUNet", "ResUNet", "ResUNetV2", "ResidualBlock", "PreActivationResBlock", "SqueezeExcitation"]
+# UNET4DownscalingWRF-v2 Models
+# Importa directament des dels mòduls:
+# from models.unet import UNetFactory, SimpleUNet, ResUNet, ResUNetV2
+# from config.config import ModelConfig, ResUNetConfig
+# from utils.metrics import all_metrics

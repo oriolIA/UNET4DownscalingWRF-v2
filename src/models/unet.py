@@ -12,7 +12,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .blocks import (
+from models.blocks import (
     ResidualBlock,
     PreActivationResBlock,
     DilatedBottleneck,
@@ -20,7 +20,7 @@ from .blocks import (
     UpBlock,
     AttentionGate,
 )
-from ..config.config import (
+from config.config import (
     ModelConfig,
     ResUNetConfig,
     ResUNetV2Config,

@@ -15,7 +15,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from ..config.config import TrainingConfig
+from config.config import TrainingConfig
 
 logger = logging.getLogger(__name__)
 

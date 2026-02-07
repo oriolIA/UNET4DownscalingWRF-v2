@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ..config.config import NormType
+from config.config import NormType
 
 logger = logging.getLogger(__name__)
 

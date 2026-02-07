@@ -1,0 +1,91 @@
+Metadata-Version: 2.4
+Name: unet4downscalingwrf-v2
+Version: 2.0.0
+Summary: Modular Wind Field Downscaling with Enhanced UNet Architecture
+Author-email: oriolIA <oriolbot2@gmail.com>
+License: MIT
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: torch>=2.0.0
+Requires-Dist: torchvision>=0.15.0
+Requires-Dist: numpy>=1.24.0
+Requires-Dist: netCDF4>=1.6.0
+Requires-Dist: xarray>=2023.0.0
+Requires-Dist: pandas>=2.0.0
+Requires-Dist: scikit-image>=0.21.0
+Requires-Dist: scipy>=1.11.0
+Requires-Dist: matplotlib>=3.7.0
+Requires-Dist: tqdm>=4.65.0
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: hydra-core>=1.3.0
+Requires-Dist: torchmetrics>=1.0.0
+Requires-Dist: wandb>=0.15.0
+Requires-Dist: einops>=0.6.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0.0; extra == "dev"
+Requires-Dist: black>=23.0.0; extra == "dev"
+Requires-Dist: mypy>=1.0.0; extra == "dev"
+Requires-Dist: ruff>=0.1.0; extra == "dev"
+
+# UNET4DownscalingWRF-v2
+
+**Improved Wind Field Downscaling with Modular UNet Architecture**
+
+A refactored and enhanced version of UNET4downscallinngWRF with:
+- **Cleaner architecture** - Modular, composable components
+- **Flexible configuration** - Dataclass-based config system
+- **Better training pipeline** - Callbacks, metrics, logging
+- **Type safety** - Full type hints
+- **Enhanced models** - Improved ResUNet, attention mechanisms
+
+## Quick Start
+
+```bash
+# Clone and install
+git clone https://github.com/oriolIA/UNET4DownscalingWRF-v2.git
+cd UNET4DownscalingWRF-v2
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Train
+python -m src.main --mode train --config configs/resunet_default.yaml
+
+# Predict
+python -m src.main --mode predict --model outputs/latest/model.pth --input data/
+```
+
+## Architecture Highlights
+
+```
+Input (C×H×W)
+    ↓
+Encoder: Residual Blocks + MaxPool (×3)
+    ↓
+Bottleneck: Dilated/Enhanced Residual (configurable)
+    ↓
+Decoder: Upsample + Residual Blocks (×3)
+    ↓
+Output (C×H×W)
+```
+
+## Key Improvements Over v1
+
+| Aspect | v1 | v2 |
+|--------|----|----|
+| Config | YAML + argparse | Dataclass + hydra |
+| Models | Single file | Factory pattern |
+| Training | Monolithic loop | Callbacks + hooks |
+| Logging | Basic | TensorBoard + wandb |
+| Error handling | Minimal | Structured exceptions |
+| Type hints | Partial | Full |
+
+## Requirements
+
+- Python 3.10+
+- PyTorch 2.0+
+- See `requirements.txt`
+
+## License
+
+MIT
