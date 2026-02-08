@@ -1,11 +1,10 @@
 """
-Metrics utilities for UNET4DownscalingWRF-v2.
-
-Common metrics for evaluating weather downscaling models.
+Metrics utilities for WRF downscaling.
 """
 
 import torch
 import torch.nn.functional as F
+from typing import Dict
 
 
 def mse(pred: torch.Tensor, target: torch.Tensor) -> float:
@@ -23,31 +22,30 @@ def psnr(pred: torch.Tensor, target: torch.Tensor, max_val: float = 1.0) -> floa
     mse_val = F.mse_loss(pred, target)
     if mse_val == 0:
         return float('inf')
-    return 20 * torch.log10(torch.tensor(max_val)) - 10 * torch.log10(mse_val).item()
+    return 20 * torch.log10(max_val / torch.sqrt(mse_val)).item()
 
 
 def ssim(pred: torch.Tensor, target: torch.Tensor, window_size: int = 11) -> float:
-    """Structural Similarity Index (simplified)."""
-    # Simplified SSIM - just returning correlation-based similarity
-    pred_mean = pred.mean()
-    target_mean = target.mean()
-    pred_std = pred.std()
-    target_std = target.std()
+    """Structural Similarity Index."""
+    # Simplified SSIM - full implementation in production
+    mu_pred = F.avg_pool2d(pred, window_size, stride=1, padding=window_size//2)
+    mu_target = F.avg_pool2d(target, window_size, stride=1, padding=window_size//2)
     
-    if pred_std == 0 or target_std == 0:
-        return 1.0 if pred_mean == target_mean else 0.0
+    sigma_pred = F.avg_pool2d(pred ** 2, window_size, stride=1, padding=window_size//2) - mu_pred ** 2
+    sigma_target = F.avg_pool2d(target ** 2, window_size, stride=1, padding=window_size//2) - mu_target ** 2
+    sigma_cross = F.avg_pool2d(pred * target, window_size, stride=1, padding=window_size//2) - mu_pred * mu_target
     
-    covariance = ((pred - pred_mean) * (target - target_mean)).mean()
-    c1 = 0.01 ** 2
-    c2 = 0.03 ** 2
+    C1 = (0.01 * 1.0) ** 2
+    C2 = (0.03 * 1.0) ** 2
     
-    numerator = (2 * pred_mean * target_mean + c1) * (2 * covariance + c2)
-    denominator = (pred_mean ** 2 + target_mean ** 2 + c1) * (pred_std ** 2 + target_std ** 2 + c2)
+    numerator = (2 * mu_pred * mu_target + C1) * (2 * sigma_cross + C2)
+    denominator = (mu_pred ** 2 + mu_target ** 2 + C1) * (sigma_pred + sigma_target + C2)
     
-    return (numerator / denominator).item()
+    ssim_map = numerator / (denominator + 1e-8)
+    return ssim_map.mean().item()
 
 
-def all_metrics(pred: torch.Tensor, target: torch.Tensor) -> dict:
+def compute_all_metrics(pred: torch.Tensor, target: torch.Tensor) -> Dict[str, float]:
     """Compute all metrics."""
     return {
         "mse": mse(pred, target),
@@ -55,3 +53,11 @@ def all_metrics(pred: torch.Tensor, target: torch.Tensor) -> dict:
         "psnr": psnr(pred, target),
         "ssim": ssim(pred, target),
     }
+
+
+if __name__ == "__main__":
+    # Test
+    pred = torch.randn(2, 2, 64, 64)
+    target = torch.randn(2, 2, 64, 64)
+    metrics = compute_all_metrics(pred, target)
+    print("Metrics:", metrics)

@@ -1,5 +1,5 @@
-# UNET4DownscalingWRF-v2 Models
-# Importa directament des dels mòduls:
-# from models.unet import UNetFactory, SimpleUNet, ResUNet, ResUNetV2
-# from config.config import ModelConfig, ResUNetConfig
-# from utils.metrics import all_metrics
+# Models for UNET4DownscalingWRF-v2
+
+from .resunet import ResUNet, ResUNetSmall
+
+__all__ = ['ResUNet', 'ResUNetSmall']
