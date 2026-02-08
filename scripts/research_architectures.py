@@ -37,11 +37,11 @@ class UNetSimple(nn.Module):
         
         # Decoder with upsampling
         self.up3 = nn.ConvTranspose2d(base * 8, base * 4, 2, stride=2)
-        self.dec3 = self._conv_block(base * 8, base * 4)
+        self.dec3 = self._conv_block(base * 4 + base * 4, base * 4)  # Skip connection
         self.up2 = nn.ConvTranspose2d(base * 4, base * 2, 2, stride=2)
-        self.dec2 = self._conv_block(base * 4, base * 2)
+        self.dec2 = self._conv_block(base * 2 + base * 2, base * 2)
         self.up1 = nn.ConvTranspose2d(base * 2, base, 2, stride=2)
-        self.dec1 = self._conv_block(base * 2, base)
+        self.dec1 = self._conv_block(base + base, base)
         
         self.out = nn.Conv2d(base, out_ch, 1)
     
@@ -61,7 +61,7 @@ class UNetSimple(nn.Module):
         e3 = self.enc3(self.pool(e2))
         b = self.bottleneck(self.pool(e3))
         
-        d3 = self.dec3(self.up3(b))
+        d3 = self.up3(b)
         if d3.shape[2:] != e3.shape[2:]:
             d3 = F.interpolate(d3, e3.shape[2:], mode='bilinear', align_corners=True)
         d3 = self.dec3(torch.cat([d3, e3], 1))
@@ -111,11 +111,8 @@ class ESRGAN(nn.Module):
         self.RRDB_trunk = nn.Sequential(*[RRDB(nf, gc=32) for _ in range(nb)])
         self.conv_trunk = nn.Conv2d(nf, nf, 3, padding=1)
         
-        # Upsampling: 2x
+        # 2x upsampling (FIX: removed one PixelShuffle block)
         self.conv_up = nn.Sequential(
-            nn.Conv2d(nf, nf * 4, 3, padding=1),
-            nn.PixelShuffle(2),
-            nn.LeakyReLU(0.2, inplace=True),
             nn.Conv2d(nf, nf * 4, 3, padding=1),
             nn.PixelShuffle(2),
             nn.LeakyReLU(0.2, inplace=True),
@@ -126,7 +123,8 @@ class ESRGAN(nn.Module):
     def forward(self, x):
         feat = self.conv_first(x)
         feat = self.conv_trunk(self.RRDB_trunk(feat))
-        feat = feat + self.conv_first(x)  # Long residual
+        # NOTE: Long residual removed - spatial mismatch after upsampling
+        feat = feat + self.conv_first(x)  # Local residual before upsampling
         feat = self.conv_up(feat)
         feat = self.conv_hr(feat)
         return self.conv_last(feat)
