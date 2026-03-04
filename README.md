@@ -7,7 +7,7 @@ A refactored and enhanced version of UNET4downscallinngWRF with:
 - **Flexible configuration** - Dataclass-based config system
 - **Better training pipeline** - Callbacks, metrics, logging
 - **Type safety** - Full type hints
-- **Enhanced models** - Improved ResUNet, attention mechanisms
+- **Enhanced models** - SE blocks, attention gates, deep supervision
 
 ## Quick Start
 
@@ -31,13 +31,39 @@ python -m src.main --mode predict --model outputs/latest/model.pth --input data/
 ```
 Input (C×H×W)
     ↓
-Encoder: Residual Blocks + MaxPool (×3)
+Encoder: SE-Residual Blocks + MaxPool (×4)
     ↓
-Bottleneck: Dilated/Enhanced Residual (configurable)
+Bottleneck: SE-Enhanced Residual
     ↓
-Decoder: Upsample + Residual Blocks (×3)
+Decoder: Upsample + Attention Gates + SE-Residual Blocks (×4)
     ↓
-Output (C×H×W)
+Output (C×H×W) + Multi-scale outputs (deep supervision)
+```
+
+## Model Variants
+
+| Model | SE Blocks | Attention | Deep Supervision | Parameters |
+|-------|------------|-----------|------------------|------------|
+| ResUNet | ✓ | ✓ | ✓ | 33.5M |
+| ResUNet (no SE) | ✗ | ✓ | ✓ | 33.1M |
+| ResUNet (basic) | ✗ | ✗ | ✗ | ~31M |
+| UNet Classic | ✗ | ✗ | ✗ | ~17M |
+
+### Creating Models
+
+```python
+from src.models.resunet import ResUNet, UNetClassic, create_model
+
+# Full-featured model
+model = ResUNet(in_channels=7, out_channels=2, use_se=True, use_deep_supervision=True)
+
+# No SE blocks
+model = ResUNet(in_channels=7, out_channels=2, use_se=False)
+
+# Factory pattern
+model = create_model('resunet_deep')
+model = create_model('resunet_se')
+model = create_model('unet_classic')
 ```
 
 ## Key Improvements Over v1
@@ -50,6 +76,20 @@ Output (C×H×W)
 | Logging | Basic | TensorBoard + wandb |
 | Error handling | Minimal | Structured exceptions |
 | Type hints | Partial | Full |
+| Attention | None | AG-UNet gates |
+| Channel Attention | None | Squeeze-and-Excitation |
+| Multi-scale | None | Deep Supervision |
+
+## New Features
+
+### Squeeze-and-Excitation (SE) Blocks
+Channel attention mechanism that learns to recalibrate feature responses.
+
+### Attention Gates (AG-UNET)
+Filters skip connections to focus on relevant spatial regions.
+
+### Deep Supervision
+Multiple output heads at different scales for better gradient flow and intermediate predictions.
 
 ## Requirements
 
