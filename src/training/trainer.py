@@ -9,7 +9,7 @@ from datetime import datetime
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 import numpy as np
 import xarray as xr
 from tqdm import tqdm
@@ -22,7 +22,7 @@ from src.models.resunet import ResUNet
 from src.utils.metrics import compute_all_metrics
 
 
-class WRF Dataset(Dataset):
+class WRFDataset(Dataset):
     """Dataset for WRF downscaling."""
     
     VARIABLES = ["U", "V", "W", "T", "P", "HGT", "TKE"]
@@ -146,8 +146,8 @@ def main():
     writer = SummaryWriter(output_dir / "logs")
     
     # Data
-    train_ds = WRF Dataset(args.lr_dir, args.hr_dir, "train")
-    val_ds = WRF Dataset(args.lr_dir, args.hr_dir, "val")
+    train_ds = WRFDataset(args.lr_dir, args.hr_dir, "train")
+    val_ds = WRFDataset(args.lr_dir, args.hr_dir, "val")
     
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=4)
     val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=4)

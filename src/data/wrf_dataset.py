@@ -1,10 +1,11 @@
 """
 Data loading utilities for WRF data.
 
-Handles NetCDF loading, preprocessing, and dataset creation.
+Handles NetCDF loading, preprocessing, dataset creation, and augmentation.
 """
 
 import logging
+import random
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -17,6 +18,47 @@ from torch.utils.data import Dataset, DataLoader
 from .preprocessing import WRFNormalizer, DataPreprocessor
 
 logger = logging.getLogger(__name__)
+
+
+class WRFDataAugmentation:
+    """Data augmentation for WRF training data."""
+    
+    def __init__(
+        self,
+        flip_horizontal: float = 0.5,
+        flip_vertical: float = 0.5,
+        rotation: float = 0.5,
+        add_noise: float = 0.0,
+    ):
+        self.flip_horizontal = flip_horizontal
+        self.flip_vertical = flip_vertical
+        self.rotation = rotation
+        self.add_noise = add_noise
+    
+    def __call__(self, x: torch.Tensor, y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Apply augmentation to input and target tensors."""
+        # Random horizontal flip
+        if random.random() < self.flip_horizontal:
+            x = torch.flip(x, dims=[-1])
+            y = torch.flip(y, dims=[-1])
+        
+        # Random vertical flip
+        if random.random() < self.flip_vertical:
+            x = torch.flip(x, dims=[-2])
+            y = torch.flip(y, dims=[-2])
+        
+        # Random rotation (90, 180, 270 degrees)
+        if random.random() < self.rotation:
+            k = random.choice([1, 2, 3])  # 90, 180, 270 degrees
+            x = torch.rot90(x, k, dims=[-2, -1])
+            y = torch.rot90(y, k, dims=[-2, -1])
+        
+        # Add Gaussian noise (optional)
+        if self.add_noise > 0:
+            noise = torch.randn_like(x) * self.add_noise
+            x = x + noise
+        
+        return x, y
 
 
 class WRFDataset(Dataset):
@@ -33,6 +75,7 @@ class WRFDataset(Dataset):
         patch_size: int = 64,
         transform: Optional[callable] = None,
         is_train: bool = True,
+        augmentation: Optional[WRFDataAugmentation] = None,
     ):
         self.predictor_files = predictor_files
         self.target_files = target_files or predictor_files
@@ -41,6 +84,7 @@ class WRFDataset(Dataset):
         self.patch_size = patch_size
         self.transform = transform
         self.is_train = is_train
+        self.augmentation = augmentation
 
         # Load metadata
         self._load_metadata()
@@ -103,6 +147,10 @@ class WRFDataset(Dataset):
                 j = np.random.randint(0, w - self.patch_size + 1)
                 x = x[:, i:i + self.patch_size, j:j + self.patch_size]
                 y = y[:, i:i + self.patch_size, j:j + self.patch_size]
+        
+        # Apply data augmentation during training
+        if self.is_train and self.augmentation is not None:
+            x, y = self.augmentation(x, y)
 
         return {"input": x, "target": y, "file": str(self.predictor_files[file_idx]), "time_idx": time_idx}
 
@@ -121,6 +169,8 @@ class WRFDataModule:
         num_workers: int = 4,
         train_ratio: float = 0.8,
         pin_memory: bool = True,
+        use_augmentation: bool = True,
+        augmentation_config: Optional[dict] = None,
     ):
         self.predictors_path = Path(predictors_path)
         self.targets_path = Path(targets_path) if targets_path else self.predictors_path
@@ -131,6 +181,14 @@ class WRFDataModule:
         self.num_workers = num_workers
         self.train_ratio = train_ratio
         self.pin_memory = pin_memory
+        self.use_augmentation = use_augmentation
+        self.augmentation_config = augmentation_config or {}
+        
+        # Create augmentation instance
+        if self.use_augmentation:
+            self.augmentation = WRFDataAugmentation(**self.augmentation_config)
+        else:
+            self.augmentation = None
 
         self.predictor_files: List[Path] = []
         self.train_dataset: Optional[WRFDataset] = None
@@ -160,7 +218,7 @@ class WRFDataModule:
 
         self.train_dataset = WRFDataset(
             train_files, self.targets_path, self.input_vars, self.target_vars,
-            self.patch_size, is_train=True,
+            self.patch_size, is_train=True, augmentation=self.augmentation,
         )
         self.val_dataset = WRFDataset(
             val_files, self.targets_path, self.input_vars, self.target_vars,

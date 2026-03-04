@@ -1,0 +1,9 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 189, in _run_module_as_main
+  File "<frozen runpy>", line 112, in _get_module_details
+  File "/home/oriol/git/UNET4DownscalingWRF-v2/src/training/__init__.py", line 1, in <module>
+    from .trainer import Trainer, Callback, EarlyStopping, CheckpointCallback
+  File "/home/oriol/git/UNET4DownscalingWRF-v2/src/training/trainer.py", line 25
+    class WRF Dataset(Dataset):
+              ^^^^^^^
+SyntaxError: invalid syntax
