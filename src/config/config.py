@@ -79,10 +79,13 @@ class TrainingConfig:
     weight_decay: float = 0.0
     batch_size: int = 32
     gradient_clip: Optional[float] = None
+    gradient_accumulation_steps: int = 1
     validate_every: int = 1
     save_every: int = 10
     patience: Optional[int] = None
     mixed_precision: bool = False
+    loss_function: str = "mae"  # mae, ssim, combined, perceptual
+    ssim_weight: float = 0.15  # Weight for SSIM in combined loss
 
 
 @dataclass

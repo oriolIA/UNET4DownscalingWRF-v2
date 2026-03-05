@@ -1,5 +1,6 @@
 """
 Training script for UNET4DownscalingWRF-v2
+With Mixed Precision (AMP), Gradient Accumulation, and Advanced Loss Functions
 """
 
 import argparse
@@ -9,17 +10,133 @@ from datetime import datetime
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 import numpy as np
 import xarray as xr
 from tqdm import tqdm
 from tensorboardX import SummaryWriter
+from torch.cuda.amp import autocast, GradScaler
 
 # Add src to path
 sys.path.append(str(Path(__file__).parent.parent))
 
 from src.models.resunet import ResUNet
 from src.utils.metrics import compute_all_metrics
+
+
+class SSIMLoss(nn.Module):
+    """SSIM Loss for better perceptual quality."""
+    
+    def __init__(self, window_size: int = 11, channel: int = 1):
+        super().__init__()
+        self.window_size = window_size
+        self.channel = channel
+        self.window = self._create_window(window_size, channel)
+    
+    def _gaussian(self, window_size: int, sigma: float = 1.5):
+        gauss = torch.Tensor([
+            np.exp(-(x - window_size // 2) ** 2 / float(2 * sigma ** 2))
+            for x in range(window_size)
+        ])
+        return gauss / gauss.sum()
+    
+    def _create_window(self, window_size: int, channel: int):
+        # Create 1D window
+        _1D_window = self._gaussian(window_size).unsqueeze(1)
+        # Create 2D window
+        _2D_window = _1D_window.mm(_1D_window.t()).float().unsqueeze(0).unsqueeze(0)
+        window = _2D_window.expand(channel, 1, window_size, window_size).contiguous()
+        return window
+    
+    def _ssim(self, img1: torch.Tensor, img2: torch.Tensor):
+        if self.window.device != img1.device:
+            self.window = self.window.to(img1.device)
+        
+        window = self.window
+        
+        mu1 = F.conv2d(img1, window, padding=self.window_size // 2, groups=self.channel)
+        mu2 = F.conv2d(img2, window, padding=self.window_size // 2, groups=self.channel)
+        
+        mu1_sq = mu1.pow(2)
+        mu2_sq = mu2.pow(2)
+        mu1_mu2 = mu1 * mu2
+        
+        sigma1_sq = F.conv2d(img1 * img1, window, padding=self.window_size // 2, groups=self.channel) - mu1_sq
+        sigma2_sq = F.conv2d(img2 * img2, window, padding=self.window_size // 2, groups=self.channel) - mu2_sq
+        sigma12 = F.conv2d(img1 * img2, window, padding=self.window_size // 2, groups=self.channel) - mu1_mu2
+        
+        C1 = 0.01 ** 2
+        C2 = 0.03 ** 2
+        
+        ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / \
+                   ((mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2))
+        
+        return ssim_map.mean()
+    
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        # Handle deep supervision (list of outputs)
+        if isinstance(pred, list):
+            # Average SSIM across all outputs (upsampled to match target)
+            ssim_vals = []
+            for p in pred:
+                # Upsample to match target size
+                p_up = F.interpolate(p, size=target.shape[2:], mode='bilinear', align_corners=False)
+                ssim_vals.append(1 - self._ssim(p_up[:, :1], target[:, :1]))
+            return torch.stack(ssim_vals).mean()
+        
+        return 1 - self._ssim(pred[:, :1], target[:, :1])
+
+
+class CombinedLoss(nn.Module):
+    """Combined MAE + SSIM Loss."""
+    
+    def __init__(self, alpha: float = 0.85):
+        super().__init__()
+        self.alpha = alpha  # Weight for MAE
+        self.mae = nn.L1Loss()
+        self.ssim = SSIMLoss()
+    
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        # Handle deep supervision (list of outputs)
+        if isinstance(pred, list):
+            # Average loss across all outputs
+            mae_vals = []
+            ssim_vals = []
+            for p in pred:
+                p_up = F.interpolate(p, size=target.shape[2:], mode='bilinear', align_corners=False)
+                mae_vals.append(self.mae(p_up, target))
+                ssim_vals.append(self.ssim(p_up, target))
+            mae_loss = torch.stack(mae_vals).mean()
+            ssim_loss = torch.stack(ssim_vals).mean()
+        else:
+            mae_loss = self.mae(pred, target)
+            ssim_loss = self.ssim(pred, target)
+        
+        return self.alpha * mae_loss + (1 - self.alpha) * ssim_loss
+
+
+class PerceptualLoss(nn.Module):
+    """Perceptual loss using feature differences (simplified)."""
+    
+    def __init__(self):
+        super().__init__()
+        # Use simple feature-based loss
+        self.l1 = nn.L1Loss()
+    
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        # Multi-scale L1 loss
+        loss = 0.0
+        
+        if isinstance(pred, list):
+            # For deep supervision: weight earlier scales more, upsample to match target
+            for i, p in enumerate(pred):
+                scale_weight = 2 ** (len(pred) - i - 1)
+                p_up = F.interpolate(p, size=target.shape[2:], mode='bilinear', align_corners=False)
+                loss += scale_weight * self.l1(p_up, target)
+            return loss
+        else:
+            return self.l1(pred, target)
 
 
 class WRFDataset(Dataset):
@@ -77,28 +194,61 @@ class WRFDataset(Dataset):
         return torch.from_numpy(lr), torch.from_numpy(hr)
 
 
-def train_epoch(model, loader, optimizer, criterion, device):
-    """Train one epoch."""
+def train_epoch(model, loader, optimizer, criterion, device, use_amp: bool = False, 
+                scaler: GradScaler = None, gradient_accumulation_steps: int = 1,
+                gradient_clip: float = None):
+    """Train one epoch with Mixed Precision and Gradient Accumulation."""
     model.train()
     total_loss = 0
     
-    for lr, hr in tqdm(loader, desc="Training"):
+    optimizer.zero_grad()
+    
+    for batch_idx, (lr, hr) in enumerate(tqdm(loader, desc="Training")):
         lr = lr.to(device)
         hr = hr.to(device)
         
-        optimizer.zero_grad()
-        pred = model(lr)
-        loss = criterion(pred, hr)
-        loss.backward()
-        optimizer.step()
+        if use_amp and scaler is not None:
+            # Mixed precision forward pass
+            with autocast():
+                pred = model(lr)
+                loss = criterion(pred, hr)
+                loss = loss / gradient_accumulation_steps
+            
+            # Scaled backward
+            scaler.scale(loss).backward()
+            
+            # Gradient accumulation
+            if (batch_idx + 1) % gradient_accumulation_steps == 0:
+                # Gradient clipping
+                if gradient_clip:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip)
+                
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+        else:
+            # Standard forward pass
+            pred = model(lr)
+            loss = criterion(pred, hr)
+            loss = loss / gradient_accumulation_steps
+            
+            loss.backward()
+            
+            # Gradient accumulation
+            if (batch_idx + 1) % gradient_accumulation_steps == 0:
+                if gradient_clip:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip)
+                optimizer.step()
+                optimizer.zero_grad()
         
-        total_loss += loss.item()
+        total_loss += loss.item() * gradient_accumulation_steps
     
     return total_loss / len(loader)
 
 
-def validate(model, loader, criterion, device):
-    """Validate model."""
+def validate(model, loader, criterion, device, use_amp: bool = False):
+    """Validate model with optional mixed precision."""
     model.eval()
     total_loss = 0
     all_metrics = []
@@ -108,11 +258,20 @@ def validate(model, loader, criterion, device):
             lr = lr.to(device)
             hr = hr.to(device)
             
-            pred = model(lr)
-            loss = criterion(pred, hr)
+            if use_amp:
+                with autocast():
+                    pred = model(lr)
+                    loss = criterion(pred, hr)
+            else:
+                pred = model(lr)
+                loss = criterion(pred, hr)
+            
             total_loss += loss.item()
             
-            # Metrics
+            # Metrics - handle deep supervision outputs
+            if isinstance(pred, list):
+                pred = pred[0]  # Use main output for metrics
+            
             metrics = compute_all_metrics(pred, hr)
             all_metrics.append(metrics)
     
@@ -135,6 +294,17 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--output_dir", type=str, default="outputs")
     parser.add_argument("--device", type=str, default="cuda")
+    
+    # New training options
+    parser.add_argument("--use_amp", action="store_true", help="Enable mixed precision training")
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1, 
+                        help="Number of steps for gradient accumulation (effective batch = batch_size * steps)")
+    parser.add_argument("--gradient_clip", type=float, default=None, 
+                        help="Gradient clipping value")
+    parser.add_argument("--loss", type=str, default="mae", choices=["mae", "ssim", "combined", "perceptual"],
+                        help="Loss function type")
+    parser.add_argument("--ssim_weight", type=float, default=0.15, 
+                        help="Weight of SSIM loss in combined loss (0-1)")
     
     args = parser.parse_args()
     
@@ -160,10 +330,33 @@ def main():
     
     model = model.to(device)
     
-    # Training
-    criterion = nn.L1Loss()  # MAE
+    # Loss function
+    if args.loss == "mae":
+        criterion = nn.L1Loss()
+    elif args.loss == "ssim":
+        criterion = SSIMLoss()
+    elif args.loss == "combined":
+        criterion = CombinedLoss(alpha=1 - args.ssim_weight)
+    elif args.loss == "perceptual":
+        criterion = PerceptualLoss()
+    else:
+        criterion = nn.L1Loss()
+    
+    print(f"Using loss: {args.loss}")
+    
+    # Optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=10, factor=0.5)
+    
+    # Mixed precision scaler
+    scaler = GradScaler() if args.use_amp else None
+    use_amp = args.use_amp and device.type == "cuda"
+    
+    if use_amp:
+        print(f"Mixed Precision Training enabled (effective batch: {args.batch_size * args.gradient_accumulation_steps})")
+    
+    if args.gradient_accumulation_steps > 1:
+        print(f"Gradient Accumulation: {args.gradient_accumulation_steps} steps (effective batch: {args.batch_size * args.gradient_accumulation_steps})")
     
     # Train loop
     best_val_loss = float("inf")
@@ -172,10 +365,15 @@ def main():
         print(f"\nEpoch {epoch+1}/{args.epochs}")
         
         # Train
-        train_loss = train_epoch(model, train_loader, optimizer, criterion, device)
+        train_loss = train_epoch(
+            model, train_loader, optimizer, criterion, device,
+            use_amp=use_amp, scaler=scaler,
+            gradient_accumulation_steps=args.gradient_accumulation_steps,
+            gradient_clip=args.gradient_clip
+        )
         
         # Validate
-        val_loss, metrics = validate(model, val_loader, criterion, device)
+        val_loss, metrics = validate(model, val_loader, criterion, device, use_amp=use_amp)
         
         # Log
         writer.add_scalar("train/loss", train_loss, epoch)
@@ -183,13 +381,22 @@ def main():
         for k, v in metrics.items():
             writer.add_scalar(f"val/{k}", v, epoch)
         
-        print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
+        # Learning rate
+        current_lr = optimizer.param_groups[0]['lr']
+        writer.add_scalar("train/lr", current_lr, epoch)
+        
+        print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | LR: {current_lr:.2e}")
         print(f"  MSE: {metrics['mse']:.6f} | MAE: {metrics['mae']:.4f} | PSNR: {metrics['psnr']:.2f} | SSIM: {metrics['ssim']:.4f}")
         
         # Save best
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            torch.save(model.state_dict(), output_dir / "best_model.pth")
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'val_loss': val_loss,
+            }, output_dir / "best_model.pth")
             print(f"  -> Saved best model")
         
         scheduler.step(val_loss)

@@ -79,6 +79,9 @@ model = create_model('unet_classic')
 | Attention | None | AG-UNet gates |
 | Channel Attention | None | Squeeze-and-Excitation |
 | Multi-scale | None | Deep Supervision |
+| Mixed Precision | None | AMP (torch.cuda.amp) |
+| Loss Functions | MAE only | MAE + SSIM + Combined + Perceptual |
+| Gradient Accumulation | None | Configurable steps |
 
 ## New Features
 
@@ -90,6 +93,30 @@ Filters skip connections to focus on relevant spatial regions.
 
 ### Deep Supervision
 Multiple output heads at different scales for better gradient flow and intermediate predictions.
+
+### Mixed Precision Training (AMP)
+Automatic Mixed Precision training for faster training and reduced memory usage.
+```bash
+python -m src.main --mode train --use_amp
+```
+
+### Advanced Loss Functions
+- **SSIM Loss**: Structural Similarity Index for better perceptual quality
+- **Combined Loss**: Weighted combination of MAE + SSIM (default)
+- **Perceptual Loss**: Multi-scale L1 loss for deep supervision
+
+```bash
+# Using different loss functions
+python -m src.main --mode train --loss ssim
+python -m src.main --mode train --loss combined
+python -m src.main --mode train --loss perceptual
+```
+
+### Gradient Accumulation
+Train with larger effective batch sizes even with limited GPU memory.
+```bash
+python -m src.main --mode train --gradient_accumulation_steps 4
+```
 
 ## Requirements
 
