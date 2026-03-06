@@ -8,6 +8,7 @@ A refactored and enhanced version of UNET4downscallinngWRF with:
 - **Better training pipeline** - Callbacks, metrics, logging
 - **Type safety** - Full type hints
 - **Enhanced models** - SE blocks, attention gates, deep supervision
+- **Pretrained encoders** - Transfer learning with ResNet-18/34
 
 ## Quick Start
 
@@ -22,6 +23,9 @@ pip install -r requirements.txt
 # Train
 python -m src.main --mode train --config configs/resunet_default.yaml
 
+# Train with pretrained encoder (recommended!)
+python -m src.main --mode train --encoder resnet18 --pretrained
+
 # Predict
 python -m src.main --mode predict --model outputs/latest/model.pth --input data/
 ```
@@ -32,6 +36,7 @@ python -m src.main --mode predict --model outputs/latest/model.pth --input data/
 Input (C×H×W)
     ↓
 Encoder: SE-Residual Blocks + MaxPool (×4)
+    OR Pretrained ResNet-18/34
     ↓
 Bottleneck: SE-Enhanced Residual
     ↓
@@ -42,28 +47,55 @@ Output (C×H×W) + Multi-scale outputs (deep supervision)
 
 ## Model Variants
 
-| Model | SE Blocks | Attention | Deep Supervision | Parameters |
-|-------|------------|-----------|------------------|------------|
-| ResUNet | ✓ | ✓ | ✓ | 33.5M |
-| ResUNet (no SE) | ✗ | ✓ | ✓ | 33.1M |
-| ResUNet (basic) | ✗ | ✗ | ✗ | ~31M |
-| UNet Classic | ✗ | ✗ | ✗ | ~17M |
+| Model | SE Blocks | Attention | Deep Supervision | Pretrained | Parameters |
+|-------|------------|-----------|------------------|------------|------------|
+| ResUNet | ✓ | ✓ | ✓ | ✗ | 33.5M |
+| ResUNet (no SE) | ✗ | ✓ | ✓ | ✗ | 33.1M |
+| ResUNet (basic) | ✗ | ✗ | ✗ | ✗ | ~31M |
+| UNet Classic | ✗ | ✗ | ✗ | ✗ | ~17M |
+| **UNetPretrained (ResNet18)** | ✓ | ✓ | ✓ | ✓ | ~20M |
+| **UNetPretrained (ResNet34)** | ✓ | ✓ | ✓ | ✓ | ~30M |
 
 ### Creating Models
 
 ```python
 from src.models.resunet import ResUNet, UNetClassic, create_model
+from src.models.pretrained_encoder import UNetPretrained, create_model
 
-# Full-featured model
+# Full-featured model (custom encoder)
 model = ResUNet(in_channels=7, out_channels=2, use_se=True, use_deep_supervision=True)
 
-# No SE blocks
-model = ResUNet(in_channels=7, out_channels=2, use_se=False)
+# Pretrained encoder (recommended for transfer learning!)
+model = UNetPretrained(
+    encoder_name="resnet18",  # or "resnet34"
+    pretrained=True,           # ImageNet pretrained weights
+    in_channels=7,
+    out_channels=2,
+    use_attention=True,
+    use_deep_supervision=True,
+    frozen_stages=2            # Freeze first 2 encoder stages
+)
 
 # Factory pattern
 model = create_model('resunet_deep')
 model = create_model('resunet_se')
 model = create_model('unet_classic')
+model = create_model('resnet18', in_channels=7, out_channels=2)
+```
+
+### Pretrained Encoder Benefits
+
+- **Transfer learning**: Start with ImageNet-pretrained features
+- **Faster convergence**: Better initial representations
+- **Less data needed**: Leverage pretrained knowledge
+- **Frozen stages option**: Fine-tune only decoder for faster training
+
+```python
+# Fine-tune only decoder (faster training)
+model = UNetPretrained("resnet18", pretrained=True, frozen_stages=2)
+
+# Full fine-tuning
+model = UNetPretrained("resnet18", pretrained=True, frozen_stages=-1)
 ```
 
 ## Key Improvements Over v1
