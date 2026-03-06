@@ -47,14 +47,15 @@ Output (C×H×W) + Multi-scale outputs (deep supervision)
 
 ## Model Variants
 
-| Model | SE Blocks | Attention | Deep Supervision | Pretrained | Parameters |
-|-------|------------|-----------|------------------|------------|------------|
-| ResUNet | ✓ | ✓ | ✓ | ✗ | 33.5M |
-| ResUNet (no SE) | ✗ | ✓ | ✓ | ✗ | 33.1M |
-| ResUNet (basic) | ✗ | ✗ | ✗ | ✗ | ~31M |
-| UNet Classic | ✗ | ✗ | ✗ | ✗ | ~17M |
-| **UNetPretrained (ResNet18)** | ✓ | ✓ | ✓ | ✓ | ~20M |
-| **UNetPretrained (ResNet34)** | ✓ | ✓ | ✓ | ✓ | ~30M |
+| Model | SE | CBAM | AG | Deep Sup | Pretrained | Parameters |
+|-------|----|------|----|----------|------------|------------|
+| ResUNet (SE) | ✓ | ✗ | ✓ | ✓ | ✗ | 33.5M |
+| ResUNet (CBAM) | ✗ | ✓ | ✓ | ✓ | ✗ | 33.5M |
+| ResUNet (none) | ✗ | ✗ | ✗ | ✓ | ✗ | 33.3M |
+| ResUNet Small | ✓ | ✗ | ✓ | ✓ | ✗ | 8.4M |
+| UNet Classic | ✗ | ✗ | ✗ | ✗ | ✗ | ~17M |
+| **ResNet18 Pretrained** | ✓ | ✗ | ✓ | ✓ | ✓ | ~20M |
+| **ResNet34 Pretrained** | ✓ | ✗ | ✓ | ✓ | ✓ | ~30M |
 
 ### Creating Models
 
@@ -119,6 +120,19 @@ model = UNetPretrained("resnet18", pretrained=True, frozen_stages=-1)
 
 ### Squeeze-and-Excitation (SE) Blocks
 Channel attention mechanism that learns to recalibrate feature responses.
+
+### CBAM (Convolutional Block Attention Module)
+Combined channel + spatial attention for more focused feature learning.
+```python
+# Using CBAM attention
+model = ResUNet(in_channels=7, out_channels=2, attention='cbam')
+
+# Using SE attention (default)
+model = ResUNet(in_channels=7, out_channels=2, attention='se')
+
+# No attention
+model = ResUNet(in_channels=7, out_channels=2, attention='none')
+```
 
 ### Attention Gates (AG-UNET)
 Filters skip connections to focus on relevant spatial regions.

@@ -61,6 +61,63 @@ class SEBlock(nn.Module):
         return x * y.expand_as(x)
 
 
+class ChannelAttention(nn.Module):
+    """Channel Attention Module (part of CBAM)."""
+    
+    def __init__(self, channels: int, reduction: int = 16):
+        super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+        
+        self.fc = nn.Sequential(
+            nn.Conv2d(channels, channels // reduction, 1, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(channels // reduction, channels, 1, bias=False)
+        )
+        self.sigmoid = nn.Sigmoid()
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        avg_out = self.fc(self.avg_pool(x))
+        max_out = self.fc(self.max_pool(x))
+        out = self.sigmoid(avg_out + max_out)
+        return x * out
+
+
+class SpatialAttention(nn.Module):
+    """Spatial Attention Module (part of CBAM)."""
+    
+    def __init__(self, kernel_size: int = 7):
+        super().__init__()
+        padding = kernel_size // 2
+        self.conv = nn.Conv2d(2, 1, kernel_size, padding=padding, bias=False)
+        self.sigmoid = nn.Sigmoid()
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        concat = torch.cat([avg_out, max_out], dim=1)
+        out = self.sigmoid(self.conv(concat))
+        return x * out
+
+
+class CBAM(nn.Module):
+    """Convolutional Block Attention Module.
+    
+    Combines channel and spatial attention for more focused feature learning.
+    Reference: https://arxiv.org/abs/1807.06521
+    """
+    
+    def __init__(self, channels: int, reduction: int = 16, kernel_size: int = 7):
+        super().__init__()
+        self.channel_attention = ChannelAttention(channels, reduction)
+        self.spatial_attention = SpatialAttention(kernel_size)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.channel_attention(x)
+        x = self.spatial_attention(x)
+        return x
+
+
 class SEResidualBlock(nn.Module):
     """Residual block with SE attention."""
     
@@ -87,6 +144,37 @@ class SEResidualBlock(nn.Module):
         
         # Apply SE
         out = self.se(out)
+        
+        out = out + identity
+        return F.relu(out)
+
+
+class CBAMResidualBlock(nn.Module):
+    """Residual block with CBAM attention (channel + spatial)."""
+    
+    def __init__(self, in_channels: int, out_channels: int, reduction: int = 16, kernel_size: int = 7):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, 3, padding=1)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, 3, padding=1)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+        
+        self.cbam = CBAM(out_channels, reduction, kernel_size)
+        
+        # Skip connection
+        if in_channels != out_channels:
+            self.skip = nn.Conv2d(in_channels, out_channels, 1)
+        else:
+            self.skip = nn.Identity()
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        identity = self.skip(x)
+        
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        
+        # Apply CBAM (channel + spatial attention)
+        out = self.cbam(out)
         
         out = out + identity
         return F.relu(out)
@@ -143,12 +231,14 @@ class EncoderBlock(nn.Module):
     """Encoder block with configurable architecture."""
     
     def __init__(self, in_channels: int, out_channels: int, 
-                 use_residual: bool = True, use_se: bool = True):
+                 attention: str = "se"):
         super().__init__()
         
-        if use_se:
+        if attention == "cbam":
+            self.block = CBAMResidualBlock(in_channels, out_channels)
+        elif attention == "se":
             self.block = SEResidualBlock(in_channels, out_channels)
-        elif use_residual:
+        elif attention == "none":
             self.block = ResidualBlock(in_channels, out_channels)
         else:
             self.block = DoubleConv(in_channels, out_channels)
@@ -165,11 +255,16 @@ class ResUNet(nn.Module):
     ResUNet for WRF downscaling.
     
     Architecture:
-    - Encoder: Residual/SE blocks with pooling
-    - Bottleneck: SE-enhanced residual blocks
+    - Encoder: Residual/SE/CBAM blocks with pooling
+    - Bottleneck: SE/CBAM-enhanced residual blocks
     - Decoder: Upsampling with attention gates
     - Skip connections: Attention-gated
     - Multi-scale output (deep supervision)
+    
+    Attention options:
+    - "se": Squeeze-and-Excitation (channel attention)
+    - "cbam": CBAM (channel + spatial attention)
+    - "none": Basic residual blocks
     """
     
     def __init__(
@@ -177,13 +272,14 @@ class ResUNet(nn.Module):
         in_channels: int = 7,
         out_channels: int = 2,
         features: list = [64, 128, 256, 512],
-        use_se: bool = True,
+        attention: str = "se",  # "se", "cbam", or "none"
         use_deep_supervision: bool = True
     ):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.use_deep_supervision = use_deep_supervision
+        self.attention = attention
         
         # Encoder
         self.encoders = nn.ModuleList()
@@ -192,16 +288,13 @@ class ResUNet(nn.Module):
         in_ch = in_channels
         for feature in features:
             self.encoders.append(
-                EncoderBlock(in_ch, feature, use_se=use_se)
+                EncoderBlock(in_ch, feature, attention=attention)
             )
             self.attentions.append(AttentionGate(feature, feature, feature // 2))
             in_ch = feature
         
         # Bottleneck
-        if use_se:
-            self.bottleneck = SEResidualBlock(features[-1], features[-1] * 2)
-        else:
-            self.bottleneck = ResidualBlock(features[-1], features[-1] * 2)
+        self.bottleneck = self._make_bottleneck_block(features[-1], features[-1] * 2, attention)
         
         # Decoder
         self.upconvs = nn.ModuleList()
@@ -212,10 +305,9 @@ class ResUNet(nn.Module):
             self.upconvs.append(
                 nn.ConvTranspose2d(feature * 2, feature, kernel_size=2, stride=2)
             )
-            if use_se:
-                self.decoders.append(SEResidualBlock(feature * 2, feature))
-            else:
-                self.decoders.append(ResidualBlock(feature * 2, feature))
+            self.decoders.append(
+                self._make_decoder_block(feature * 2, feature, attention)
+            )
             self.attention_decoders.append(
                 AttentionGate(feature, feature, feature // 2)
             )
@@ -223,8 +315,6 @@ class ResUNet(nn.Module):
         # Deep supervision heads (multi-scale output)
         if use_deep_supervision:
             self.deep_supervision_heads = nn.ModuleList()
-            # Use channels from each decoder level (reversed features)
-            # After each decoder block, channels = features[::-1][i]
             for feature in reversed(features):
                 self.deep_supervision_heads.append(
                     nn.Sequential(
@@ -237,6 +327,22 @@ class ResUNet(nn.Module):
         
         # Final output
         self.final = nn.Conv2d(features[0], out_channels, kernel_size=1)
+    
+    def _make_bottleneck_block(self, in_ch: int, out_ch: int, attention: str):
+        if attention == "cbam":
+            return CBAMResidualBlock(in_ch, out_ch)
+        elif attention == "se":
+            return SEResidualBlock(in_ch, out_ch)
+        else:
+            return ResidualBlock(in_ch, out_ch)
+    
+    def _make_decoder_block(self, in_ch: int, out_ch: int, attention: str):
+        if attention == "cbam":
+            return CBAMResidualBlock(in_ch, out_ch)
+        elif attention == "se":
+            return SEResidualBlock(in_ch, out_ch)
+        else:
+            return ResidualBlock(in_ch, out_ch)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Encoder
@@ -365,12 +471,24 @@ class UNetClassic(nn.Module):
 
 # Model factory
 def create_model(model_name: str, in_channels: int = 7, out_channels: int = 2, **kwargs):
-    """Create model by name."""
+    """Create model by name.
+    
+    Options:
+    - "resunet": ResUNet with SE attention (default)
+    - "resunet_cbam": ResUNet with CBAM attention (channel + spatial)
+    - "resunet_none": ResUNet without attention
+    - "resunet_small": Smaller ResUNet
+    - "resunet_deep": ResUNet with deep supervision
+    - "unet_classic": Classic UNet baseline
+    """
+    attention = kwargs.get("attention", "se")
+    
     models = {
-        "resunet": ResUNet,
+        "resunet": lambda: ResUNet(in_channels, out_channels, attention="se"),
+        "resunet_cbam": lambda: ResUNet(in_channels, out_channels, attention="cbam"),
+        "resunet_none": lambda: ResUNet(in_channels, out_channels, attention="none"),
         "resunet_small": ResUNetSmall,
-        "resunet_se": lambda: ResUNet(in_channels, out_channels, use_se=True),
-        "resunet_deep": lambda: ResUNet(in_channels, out_channels, use_deep_supervision=True),
+        "resunet_deep": lambda: ResUNet(in_channels, out_channels, attention="se", use_deep_supervision=True),
         "unet_classic": UNetClassic,
     }
     
@@ -385,8 +503,8 @@ if __name__ == "__main__":
     x = torch.randn(1, 7, 100, 100)
     
     print("=" * 50)
-    print("Testing ResUNet (SE + Attention)")
-    model = ResUNet(in_channels=7, out_channels=2, use_se=True)
+    print("Testing ResUNet (CBAM Attention)")
+    model = ResUNet(in_channels=7, out_channels=2, attention="cbam")
     with torch.no_grad():
         y = model(x)
         if isinstance(y, list):
