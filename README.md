@@ -47,15 +47,17 @@ Output (C×H×W) + Multi-scale outputs (deep supervision)
 
 ## Model Variants
 
-| Model | SE | CBAM | AG | Deep Sup | Pretrained | Parameters |
-|-------|----|------|----|----------|------------|------------|
-| ResUNet (SE) | ✓ | ✗ | ✓ | ✓ | ✗ | 33.5M |
-| ResUNet (CBAM) | ✗ | ✓ | ✓ | ✓ | ✗ | 33.5M |
-| ResUNet (none) | ✗ | ✗ | ✗ | ✓ | ✗ | 33.3M |
-| ResUNet Small | ✓ | ✗ | ✓ | ✓ | ✗ | 8.4M |
-| UNet Classic | ✗ | ✗ | ✗ | ✗ | ✗ | ~17M |
-| **ResNet18 Pretrained** | ✓ | ✗ | ✓ | ✓ | ✓ | ~20M |
-| **ResNet34 Pretrained** | ✓ | ✗ | ✓ | ✓ | ✓ | ~30M |
+| Model | SE | CBAM | AG | ASPP | Deep Sup | Pretrained | Parameters |
+|-------|----|------|----|------|----------|------------|------------|
+| ResUNet (SE) | ✓ | ✗ | ✓ | ✗ | ✓ | ✗ | 33.5M |
+| ResUNet (CBAM) | ✗ | ✓ | ✓ | ✗ | ✓ | ✗ | 33.5M |
+| ResUNet (none) | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | 33.3M |
+| ResUNet Small | ✓ | ✗ | ✓ | ✗ | ✓ | ✗ | 8.4M |
+| **ResUNet (ASPP)** | ✓ | ✗ | ✓ | ✓ | ✓ | ✗ | **58.2M** |
+| **ResUNet (ASPP+CBAM)** | ✗ | ✓ | ✓ | ✓ | ✓ | ✗ | **58.2M** |
+| UNet Classic | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ~17M |
+| **ResNet18 Pretrained** | ✓ | ✗ | ✓ | ✗ | ✓ | ✓ | ~20M |
+| **ResNet34 Pretrained** | ✓ | ✗ | ✓ | ✗ | ✓ | ✓ | ~30M |
 
 ### Creating Models
 
@@ -136,6 +138,20 @@ model = ResUNet(in_channels=7, out_channels=2, attention='none')
 
 ### Attention Gates (AG-UNET)
 Filters skip connections to focus on relevant spatial regions.
+
+### ASPP (Atrous Spatial Pyramid Pooling)
+Multi-scale context in the bottleneck using dilated convolutions at different rates (6, 12, 18).
+**Recommended for WRF downscaling** - captures atmospheric features at multiple scales.
+```python
+# Using ASPP (recommended for WRF)
+model = ResUNet(in_channels=7, out_channels=2, use_aspp=True)
+
+# ASPP + CBAM (maximum attention)
+model = ResUNet(in_channels=7, out_channels=2, attention='cbam', use_aspp=True)
+
+# Factory
+model = create_model('resunet_aspp')
+```
 
 ### Deep Supervision
 Multiple output heads at different scales for better gradient flow and intermediate predictions.

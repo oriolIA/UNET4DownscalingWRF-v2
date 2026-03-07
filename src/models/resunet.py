@@ -15,6 +15,85 @@ import torch.nn.functional as F
 from typing import Optional, List
 
 
+class ASPP(nn.Module):
+    """Atrous Spatial Pyramid Pooling for multi-scale context.
+    
+    Captures features at multiple dilation rates for better
+    multi-scale representation. Important for WRF downscaling
+    where atmospheric features vary across scales.
+    
+    Reference: https://arxiv.org.05587
+/abs/1706    """
+    
+    def __init__(self, in_channels: int, out_channels: int, atrous_rates: list = [6, 12, 18]):
+        super().__init__()
+        
+        self.atrous_rates = atrous_rates
+        
+        # 1x1 convolution
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, 1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        )
+        
+        # Atrous convolutions at different rates
+        self.atrous_convs = nn.ModuleList()
+        for rate in atrous_rates:
+            self.atrous_convs.append(
+                nn.Sequential(
+                    nn.Conv2d(in_channels, out_channels, 3, padding=rate, dilation=rate, bias=False),
+                    nn.BatchNorm2d(out_channels),
+                    nn.ReLU(inplace=True)
+                )
+            )
+        
+        # Global average pooling - use InstanceNorm to avoid BatchNorm issues with 1x1
+        self.global_pool = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(in_channels, out_channels, 1, bias=False),
+            nn.InstanceNorm2d(out_channels, track_running_stats=True),
+            nn.ReLU(inplace=True)
+        )
+        
+        # Project all to output channels
+        self.project = nn.Sequential(
+            nn.Conv2d(out_channels * (len(atrous_rates) + 2), out_channels, 1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.5)
+        )
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h, w = x.shape[2:]
+        
+        # 1x1 conv
+        feat1 = self.conv1(x)
+        
+        # Atrous convolutions
+        feats = [feat1]
+        for atrous_conv in self.atrous_convs:
+            feats.append(atrous_conv(x))
+        
+        # Global pooling (upsampled) - set BN to eval mode to avoid 1x1 issue
+        global_feat = self.global_pool(x)
+        global_feat = F.interpolate(global_feat, size=(h, w), mode='bilinear', align_corners=False)
+        
+        # Handle BatchNorm in eval mode for 1x1
+        if not self.training:
+            for module in self.global_pool.modules():
+                if isinstance(module, (nn.BatchNorm2d, nn.InstanceNorm2d)):
+                    module.eval()
+        
+        feats.append(global_feat)
+        
+        # Concatenate and project
+        out = torch.cat(feats, dim=1)
+        out = self.project(out)
+        
+        return out
+
+
 class ResidualBlock(nn.Module):
     """Residual block with skip connection."""
     
@@ -273,13 +352,16 @@ class ResUNet(nn.Module):
         out_channels: int = 2,
         features: list = [64, 128, 256, 512],
         attention: str = "se",  # "se", "cbam", or "none"
-        use_deep_supervision: bool = True
+        use_deep_supervision: bool = True,
+        use_aspp: bool = True,  # Use ASPP in bottleneck
+        aspp_rates: list = [6, 12, 18]  # Atrous rates for ASPP
     ):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.use_deep_supervision = use_deep_supervision
         self.attention = attention
+        self.use_aspp = use_aspp
         
         # Encoder
         self.encoders = nn.ModuleList()
@@ -293,8 +375,18 @@ class ResUNet(nn.Module):
             self.attentions.append(AttentionGate(feature, feature, feature // 2))
             in_ch = feature
         
-        # Bottleneck
-        self.bottleneck = self._make_bottleneck_block(features[-1], features[-1] * 2, attention)
+        # Bottleneck with optional ASPP
+        bottleneck_in = features[-1]
+        bottleneck_out = features[-1] * 2
+        
+        if use_aspp:
+            # ASPP: multi-scale atrous convolutions
+            self.aspp = ASPP(bottleneck_in, bottleneck_out, aspp_rates)
+            # Additional refinement after ASPP
+            self.bottleneck_refine = self._make_bottleneck_block(bottleneck_out, bottleneck_out, attention)
+        else:
+            # Standard bottleneck
+            self.bottleneck = self._make_bottleneck_block(bottleneck_in, bottleneck_out, attention)
         
         # Decoder
         self.upconvs = nn.ModuleList()
@@ -354,8 +446,12 @@ class ResUNet(nn.Module):
             skip_connections.append(feat)
             encoder_features.append(feat)
         
-        # Bottleneck
-        x = self.bottleneck(x)
+        # Bottleneck with optional ASPP for multi-scale context
+        if self.use_aspp:
+            x = self.aspp(x)
+            x = self.bottleneck_refine(x)
+        else:
+            x = self.bottleneck(x)
         
         # Store features for deep supervision
         deep_features = []
@@ -479,9 +575,11 @@ def create_model(model_name: str, in_channels: int = 7, out_channels: int = 2, *
     - "resunet_none": ResUNet without attention
     - "resunet_small": Smaller ResUNet
     - "resunet_deep": ResUNet with deep supervision
+    - "resunet_aspp": ResUNet with ASPP multi-scale (RECOMMENDED for WRF)
     - "unet_classic": Classic UNet baseline
     """
     attention = kwargs.get("attention", "se")
+    use_aspp = kwargs.get("use_aspp", False)
     
     models = {
         "resunet": lambda: ResUNet(in_channels, out_channels, attention="se"),
@@ -489,6 +587,8 @@ def create_model(model_name: str, in_channels: int = 7, out_channels: int = 2, *
         "resunet_none": lambda: ResUNet(in_channels, out_channels, attention="none"),
         "resunet_small": ResUNetSmall,
         "resunet_deep": lambda: ResUNet(in_channels, out_channels, attention="se", use_deep_supervision=True),
+        "resunet_aspp": lambda: ResUNet(in_channels, out_channels, attention="se", use_aspp=True),
+        "resunet_aspp_cbam": lambda: ResUNet(in_channels, out_channels, attention="cbam", use_aspp=True),
         "unet_classic": UNetClassic,
     }
     
