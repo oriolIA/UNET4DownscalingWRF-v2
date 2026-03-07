@@ -48,11 +48,11 @@ class ASPP(nn.Module):
                 )
             )
         
-        # Global average pooling - use InstanceNorm to avoid BatchNorm issues with 1x1
+        # Global average pooling - use LayerNorm instead of InstanceNorm for 1x1
         self.global_pool = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
             nn.Conv2d(in_channels, out_channels, 1, bias=False),
-            nn.InstanceNorm2d(out_channels, track_running_stats=True),
+            nn.LayerNorm([out_channels, 1, 1], elementwise_affine=False),
             nn.ReLU(inplace=True)
         )
         
@@ -75,15 +75,9 @@ class ASPP(nn.Module):
         for atrous_conv in self.atrous_convs:
             feats.append(atrous_conv(x))
         
-        # Global pooling (upsampled) - set BN to eval mode to avoid 1x1 issue
+        # Global pooling (upsampled)
         global_feat = self.global_pool(x)
         global_feat = F.interpolate(global_feat, size=(h, w), mode='bilinear', align_corners=False)
-        
-        # Handle BatchNorm in eval mode for 1x1
-        if not self.training:
-            for module in self.global_pool.modules():
-                if isinstance(module, (nn.BatchNorm2d, nn.InstanceNorm2d)):
-                    module.eval()
         
         feats.append(global_feat)
         
