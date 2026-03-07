@@ -13,7 +13,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-config.config.config import (
+from src.config.config import (
     ModelConfig,
     DataConfig,
     TrainingConfig,

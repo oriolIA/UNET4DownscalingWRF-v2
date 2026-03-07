@@ -690,9 +690,21 @@ def create_model(model_name: str, in_channels: int = 7, out_channels: int = 2, *
     - "unet_classic": Classic UNet baseline
     - "unet++": UNet++ with dense skip connections
     - "unet++_small": Smaller UNet++
+    - "efficientnet_b0": UNet with EfficientNet-B0 encoder
+    - "efficientnet_b2": UNet with EfficientNet-B2 encoder
+    - "efficientnet_b4": UNet with EfficientNet-B4 encoder
+    - "convnext_tiny": UNet with ConvNeXt-Tiny encoder
+    - "convnext_small": UNet with ConvNeXt-Small encoder
     """
     attention = kwargs.get("attention", "se")
     use_aspp = kwargs.get("use_aspp", False)
+    
+    # Import EfficientNet encoder
+    try:
+        from .efficientnet_encoder import create_encoder_model
+        has_efficientnet = True
+    except ImportError:
+        has_efficientnet = False
     
     models = {
         "resunet": lambda: ResUNet(in_channels, out_channels, attention="se"),
@@ -707,6 +719,17 @@ def create_model(model_name: str, in_channels: int = 7, out_channels: int = 2, *
         "unet++_cbam": lambda: UNetPlusPlus(in_channels, out_channels, attention="cbam"),
         "unet++_small": UNetPlusPlusSmall,
     }
+    
+    # Add EfficientNet/ConvNeXt models if available
+    if has_efficientnet:
+        encoder_models = {
+            "efficientnet_b0": lambda: create_encoder_model("b0", in_channels=in_channels, out_channels=out_channels, **kwargs),
+            "efficientnet_b2": lambda: create_encoder_model("b2", in_channels=in_channels, out_channels=out_channels, **kwargs),
+            "efficientnet_b4": lambda: create_encoder_model("b4", in_channels=in_channels, out_channels=out_channels, **kwargs),
+            "convnext_tiny": lambda: create_encoder_model("convnext_tiny", in_channels=in_channels, out_channels=out_channels, **kwargs),
+            "convnext_small": lambda: create_encoder_model("convnext_small", in_channels=in_channels, out_channels=out_channels, **kwargs),
+        }
+        models.update(encoder_models)
     
     if model_name not in models:
         raise ValueError(f"Unknown model: {model_name}. Available: {list(models.keys())}")

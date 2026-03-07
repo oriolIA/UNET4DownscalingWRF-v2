@@ -61,12 +61,32 @@ Output (C×H×W) + Multi-scale outputs (deep supervision)
 | **UNet++** | ✓ | ✗ | ✓ | ✗ | ✓ | ✗ | ~35M |
 | **UNet++ (CBAM)** | ✗ | ✓ | ✓ | ✗ | ✓ | ✗ | ~35M |
 | **UNet++ Small** | ✓ | ✗ | ✓ | ✗ | ✓ | ✗ | ~9M |
+| **EfficientNet-B0** | ✗ | ✗ | ✗ | ✗ | ✓ | ✓ | **14.6M** |
+| **EfficientNet-B2** | ✗ | ✗ | ✗ | ✗ | ✓ | ✓ | ~25M |
+| **ConvNeXt-Tiny** | ✗ | ✗ | ✗ | ✗ | ✓ | ✓ | ~28M |
+
+### New: EfficientNet and ConvNeXt Encoders
+
+Added modern encoder backbones based on state-of-the-art architectures:
+
+- **EfficientNet-B0/B2/B4**: Compound scaling for efficiency
+- **ConvNeXt-Tiny/Small**: Modern CNN with transformer-inspired design
+
+Both support ImageNet pretrained weights for transfer learning.
+
+```bash
+# Train with EfficientNet-B0 encoder
+python -m src.main --mode train --encoder efficientnet_b0 --pretrained
+
+# Train with ConvNeXt-Tiny encoder
+python -m src.main --mode train --encoder convnext_tiny --pretrained
+```
 
 ### Creating Models
 
 ```python
 from src.models.resunet import ResUNet, UNetClassic, create_model
-from src.models.pretrained_encoder import UNetPretrained, create_model
+from src.models.efficientnet_encoder import create_encoder_model
 
 # Full-featured model (custom encoder)
 model = ResUNet(in_channels=7, out_channels=2, use_se=True, use_deep_supervision=True)
@@ -81,6 +101,15 @@ model = UNetPretrained(
     use_deep_supervision=True,
     frozen_stages=2            # Freeze first 2 encoder stages
 )
+
+# EfficientNet encoder (modern, efficient backbone)
+model = create_model('efficientnet_b0', pretrained=True)
+model = create_model('efficientnet_b2', pretrained=True)
+model = create_model('efficientnet_b4', pretrained=True)
+
+# ConvNeXt encoder (modern CNN architecture)
+model = create_model('convnext_tiny', pretrained=True)
+model = create_model('convnext_small', pretrained=True)
 
 # Factory pattern
 model = create_model('resunet_deep')
