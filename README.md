@@ -58,6 +58,9 @@ Output (C×H×W) + Multi-scale outputs (deep supervision)
 | UNet Classic | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ~17M |
 | **ResNet18 Pretrained** | ✓ | ✗ | ✓ | ✗ | ✓ | ✓ | ~20M |
 | **ResNet34 Pretrained** | ✓ | ✗ | ✓ | ✗ | ✓ | ✓ | ~30M |
+| **UNet++** | ✓ | ✗ | ✓ | ✗ | ✓ | ✗ | ~35M |
+| **UNet++ (CBAM)** | ✗ | ✓ | ✓ | ✗ | ✓ | ✗ | ~35M |
+| **UNet++ Small** | ✓ | ✗ | ✓ | ✗ | ✓ | ✗ | ~9M |
 
 ### Creating Models
 
@@ -178,6 +181,20 @@ python -m src.main --mode train --loss perceptual
 Train with larger effective batch sizes even with limited GPU memory.
 ```bash
 python -m src.main --mode train --gradient_accumulation_steps 4
+```
+
+### UNet++ (Nested U-Net)
+Dense skip connections with nested U-Net architecture for better feature fusion.
+Reference: https://arxiv.org/abs/1807.10165
+```python
+# Using UNet++ (recommended for remote sensing)
+model = create_model('unet++')
+
+# With CBAM attention
+model = create_model('unet++_cbam')
+
+# Smaller variant
+model = create_model('unet++_small')
 ```
 
 ## Requirements

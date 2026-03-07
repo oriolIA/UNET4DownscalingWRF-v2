@@ -565,6 +565,123 @@ class UNetClassic(nn.Module):
         return self.final(d1)
 
 
+class UNetPlusPlus(nn.Module):
+    """
+    U-Net++: Nested U-Net with dense skip connections.
+    
+    Reference: https://arxiv.org/abs/1807.10165
+    
+    Key improvements over standard U-Net:
+    - Dense skip pathways (nested U-nets)
+    - Deep supervision (multi-scale outputs)
+    - Better feature fusion at different scales
+    """
+    
+    def __init__(
+        self,
+        in_channels: int = 7,
+        out_channels: int = 2,
+        features: list = [64, 128, 256, 512],
+        attention: str = "se",
+        use_deep_supervision: bool = True
+    ):
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.features = features
+        self.use_deep_supervision = use_deep_supervision
+        
+        # Encoder (standard)
+        self.enc0 = DoubleConv(in_channels, features[0])
+        self.enc1 = DoubleConv(features[0], features[1])
+        self.enc2 = DoubleConv(features[1], features[2])
+        self.enc3 = DoubleConv(features[2], features[3])
+        
+        self.pool = nn.MaxPool2d(2)
+        
+        # Bottleneck
+        self.bottleneck = DoubleConv(features[3], features[3])
+        
+        # Upsample layers (match channels)
+        self.up3 = nn.ConvTranspose2d(features[3], features[3], 2, stride=2)  # 512->512
+        self.up2 = nn.ConvTranspose2d(features[3], features[2], 2, stride=2)  # 512->256
+        self.up1 = nn.ConvTranspose2d(features[2], features[1], 2, stride=2)  # 256->128
+        self.up0 = nn.ConvTranspose2d(features[1], features[0], 2, stride=2)  # 128->64
+        
+        # Decoder blocks with dense skip connections
+        # Level 3: bottleneck + enc3 -> 512+512 = 1024 -> 512
+        self.dec3 = DoubleConv(features[3] * 2, features[3])
+        
+        # Level 2: up3(dec3) + enc2 -> 256 + 256 = 512 -> 256
+        self.dec2 = DoubleConv(features[2] + features[2], features[2])
+        
+        # Level 1: up2(d2) + enc1 -> 128 + 128 = 256 -> 128
+        self.dec1 = DoubleConv(features[1] + features[1], features[1])
+        
+        # Level 0: up1(d1) + enc0 -> 64 + 64 = 128 -> 64
+        self.dec0 = DoubleConv(features[0] + features[0], features[0])
+        
+        # Deep supervision heads
+        if use_deep_supervision:
+            self.deep_sup1 = nn.Conv2d(features[1], out_channels, 1)
+            self.deep_sup2 = nn.Conv2d(features[2], out_channels, 1)
+        
+        # Final output
+        self.final = nn.Conv2d(features[0], out_channels, kernel_size=1)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Encoder
+        e0 = self.enc0(x)                           # 64, 128x128
+        e1 = self.enc1(self.pool(e0))               # 128, 64x64
+        e2 = self.enc2(self.pool(e1))               # 256, 32x32
+        e3 = self.enc3(self.pool(e2))               # 512, 16x16
+        
+        # Bottleneck
+        b = self.bottleneck(self.pool(e3))          # 512, 8x8
+        
+        # Decoder with dense skip connections
+        # Level 3
+        d3 = self.dec3(torch.cat([self.up3(b), e3], dim=1))  # 1024->512, 16x16
+        
+        # Level 2
+        d2 = self.dec2(torch.cat([self.up2(d3), e2], dim=1))  # 768->256, 32x32
+        
+        # Level 1
+        d1 = self.dec1(torch.cat([self.up1(d2), e1], dim=1))  # 384->128, 64x64
+        
+        # Level 0 (final)
+        output = self.dec0(torch.cat([self.up0(d1), e0], dim=1))  # 192->64, 128x128
+        output = self.final(output)
+        
+        # Deep supervision
+        if self.use_deep_supervision:
+            outputs = [output]
+            
+            sup1 = self.deep_sup1(d1)
+            sup1_up = F.interpolate(sup1, size=output.shape[2:], mode='bilinear', align_corners=False)
+            outputs.append(sup1_up)
+            
+            sup2 = self.deep_sup2(d2)
+            sup2_up = F.interpolate(sup2, size=output.shape[2:], mode='bilinear', align_corners=False)
+            outputs.append(sup2_up)
+            
+            return outputs
+        
+        return output
+
+
+class UNetPlusPlusSmall(nn.Module):
+    """Smaller UNet++ for faster training."""
+    
+    def __init__(self, in_channels: int = 7, out_channels: int = 2):
+        super().__init__()
+        features = [32, 64, 128, 256]
+        self.model = UNetPlusPlus(in_channels, out_channels, features)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.model(x)
+
+
 # Model factory
 def create_model(model_name: str, in_channels: int = 7, out_channels: int = 2, **kwargs):
     """Create model by name.
@@ -577,6 +694,8 @@ def create_model(model_name: str, in_channels: int = 7, out_channels: int = 2, *
     - "resunet_deep": ResUNet with deep supervision
     - "resunet_aspp": ResUNet with ASPP multi-scale (RECOMMENDED for WRF)
     - "unet_classic": Classic UNet baseline
+    - "unet++": UNet++ with dense skip connections
+    - "unet++_small": Smaller UNet++
     """
     attention = kwargs.get("attention", "se")
     use_aspp = kwargs.get("use_aspp", False)
@@ -590,6 +709,9 @@ def create_model(model_name: str, in_channels: int = 7, out_channels: int = 2, *
         "resunet_aspp": lambda: ResUNet(in_channels, out_channels, attention="se", use_aspp=True),
         "resunet_aspp_cbam": lambda: ResUNet(in_channels, out_channels, attention="cbam", use_aspp=True),
         "unet_classic": UNetClassic,
+        "unet++": lambda: UNetPlusPlus(in_channels, out_channels, attention=attention),
+        "unet++_cbam": lambda: UNetPlusPlus(in_channels, out_channels, attention="cbam"),
+        "unet++_small": UNetPlusPlusSmall,
     }
     
     if model_name not in models:
